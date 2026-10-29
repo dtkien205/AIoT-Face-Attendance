@@ -7,12 +7,7 @@ __pycache__/
 node_modules/
 frontend/dist/
 
-firmware/esp32_cam/config.h
 *.tsbuildinfo
 *.db-*
 backups/
-data/faces/*
-!data/faces/README.md
-!data/faces/.gitkeep
 
-firmware/esp32_cam_softap/config.h
