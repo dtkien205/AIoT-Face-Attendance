@@ -1,0 +1,4 @@
+# Requires CMake and a C++ compiler. Pin dlib for reproducible builds.
+dlib==19.24.6
+face-recognition==1.3.0
+setuptools<81

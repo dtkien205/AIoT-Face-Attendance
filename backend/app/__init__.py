@@ -1,0 +1,1 @@
+"""AIoT attendance backend package."""

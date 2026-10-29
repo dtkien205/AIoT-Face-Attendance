@@ -1,0 +1,20 @@
+# Allow only source required to build; never send secrets/biometrics/vendor repos.
+**/.git
+**/.git/**
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.py[cod]
+**/*.db
+**/.env
+**/.env.*
+!**/.env.example
+frontend/dist
+frontend/*.tsbuildinfo
+data
+models
+face-anti-spoofing
+fas6_iccvw2025
+firmware
+.claude
+.DS_Store

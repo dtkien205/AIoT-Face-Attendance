@@ -1,0 +1,142 @@
+name: aiot-attendance
+
+services:
+  backend:
+    image: btl-new-backend:local
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: production
+      args:
+        INSTALL_RECOGNITION: ${INSTALL_RECOGNITION:-true}
+    environment:
+      DATABASE_URL: sqlite:////app/var/attendance.db
+      ATTENDANCE_DATA_DIR: /app/var
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Create .env and set ADMIN_PASSWORD}
+      DEVICE_TOKEN: ${DEVICE_TOKEN:?Create .env and set DEVICE_TOKEN}
+      PAD_MODEL_PATH: /app/models/minifasnet-v2/MiniFASNetV2.onnx
+      PAD_REAL_THRESHOLD: ${PAD_REAL_THRESHOLD:-0.9}
+      PAD_CROP_SCALE: ${PAD_CROP_SCALE:-2.7}
+      PAD_CALIBRATED: ${PAD_CALIBRATED:-false}
+      RECOGNITION_CALIBRATED: ${RECOGNITION_CALIBRATED:-false}
+      RECOGNITION_THRESHOLD: ${RECOGNITION_THRESHOLD:-0.52}
+      RECOGNITION_MARGIN: ${RECOGNITION_MARGIN:-0.05}
+      MIN_FACE_AREA_RATIO: ${MIN_FACE_AREA_RATIO:-0.03}
+      MIN_SHARPNESS: ${MIN_SHARPNESS:-25}
+      PREVIEW_MAX_FPS: ${PREVIEW_MAX_FPS:-20}
+      STABLE_FRAMES: ${STABLE_FRAMES:-3}
+      STABLE_GAP_SECONDS: ${STABLE_GAP_SECONDS:-3}
+      FRAME_INTERVAL_SECONDS: ${FRAME_INTERVAL_SECONDS:-0.4}
+      DEVICE_OFFLINE_SECONDS: ${DEVICE_OFFLINE_SECONDS:-45}
+      LATE_AFTER_MINUTES: ${LATE_AFTER_MINUTES:-15}
+      SEED_ROSTER: ${SEED_ROSTER:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+    volumes:
+      - attendance_db:/app/var
+      - type: bind
+        source: ./data/class_roster.json
+        target: /app/data/class_roster.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./models/minifasnet-v2/MiniFASNetV2.onnx
+        target: /app/models/minifasnet-v2/MiniFASNetV2.onnx
+        read_only: true
+        bind:
+          create_host_path: false
+    ports:
+      - "${BACKEND_BIND:-0.0.0.0}:${BACKEND_PORT:-8000}:8000"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    image: btl-new-frontend:local
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_BIND:-0.0.0.0}:${FRONTEND_PORT:-8080}:8080"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  camera-bridge:
+    image: python:3.12-slim-bookworm
+    profiles: [camera-ap]
+    command: ["python", "/opt/camera_bridge.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      DEVICE_TOKEN: ${DEVICE_TOKEN:?Create .env and set DEVICE_TOKEN}
+      CAMERA_TRANSPORT: ${CAMERA_TRANSPORT:-mjpeg}
+      CAMERA_STREAM_URL: ${CAMERA_STREAM_URL:-http://192.168.4.1:81/stream}
+      CAMERA_PREVIEW_FPS: ${CAMERA_PREVIEW_FPS:-15}
+      CAMERA_CAPTURE_URL: ${CAMERA_CAPTURE_URL:-http://192.168.4.1:81/capture}
+      CAMERA_DEVICE_ID: ${CAMERA_DEVICE_ID:-esp32-cam-01}
+      CAMERA_INTERVAL_SECONDS: ${CAMERA_INTERVAL_SECONDS:-0.8}
+      CAMERA_TIMEOUT_SECONDS: ${CAMERA_TIMEOUT_SECONDS:-5}
+      BRIDGE_BACKEND_URL: http://backend:8000
+    volumes:
+      - type: bind
+        source: ./backend/camera_bridge.py
+        target: /opt/camera_bridge.py
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      backend:
+        condition: service_healthy
+    user: "10001:10001"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  attendance_db:
