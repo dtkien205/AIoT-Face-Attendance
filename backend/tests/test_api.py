@@ -88,7 +88,27 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/students/{self.student_id}", headers=self.auth).status_code, 409)
         self.post(f"/sessions/{self.session_id}/close", {})
         self.assertEqual(self.post(f"/sessions/{self.session_id}/manual-attendance", payload).status_code, 409)
-        self.assertEqual(self.post(f"/sessions/{self.session_id}/start", {}).status_code, 409)
+        self.assertEqual(self.post(f"/sessions/{self.session_id}/start", {}).status_code, 200)
+        self.assertFalse(self.post(f"/sessions/{self.session_id}/manual-attendance", payload).json()["created"])
+
+    def test_attendance_analytics_filters_by_class_and_session(self):
+        self.post(f"/sessions/{self.session_id}/manual-attendance",
+                  {"student_id": self.student_id, "reason": "Checked student card"})
+        other_class = self.post("/classes", {"code": "C2", "name": "Other class"}).json()["id"]
+        self.post("/students", {"student_code": "SV2", "name": "Second", "class_id": other_class})
+        other_session = self.post("/sessions", {"class_id": other_class, "title": "Other session"}).json()["id"]
+        self.post(f"/sessions/{other_session}/start", {})
+
+        all_data = self.client.get("/api/attendance/analytics", headers=self.auth).json()
+        self.assertEqual(all_data["summary"]["sessions"], 2)
+        self.assertEqual(all_data["summary"]["possible"], 2)
+        class_data = self.client.get(f"/api/attendance/analytics?class_id={self.class_id}", headers=self.auth).json()
+        self.assertEqual(class_data["summary"]["sessions"], 1)
+        self.assertEqual(class_data["summary"]["attendance_rate"], 100.0)
+        session_data = self.client.get(f"/api/attendance/analytics?session_id={other_session}", headers=self.auth).json()
+        self.assertEqual(session_data["summary"]["sessions"], 1)
+        self.assertEqual(session_data["summary"]["attended"], 0)
+        self.assertEqual([item["student_code"] for item in session_data["low_attendance"]], ["SV2"])
 
     def test_other_class_cannot_attend(self):
         other = self.post("/students", {"student_code": "SV2", "name": "Other"}).json()["id"]
@@ -104,20 +124,34 @@ class ApiTests(unittest.TestCase):
     def test_pipeline_stability_pad_identity_and_duplicate(self):
         detection = FaceDetection((40, 40, 80, 80), (80, 80), 6400, (160, 160), True, 1)
         with patch("app.api.attendance._detector") as detector, patch("app.api.attendance._pad") as pad, patch("app.api.attendance._recognizer") as recognizer:
-            detector.return_value.detect_largest.return_value = (detection, "ok")
+            detector.return_value.detect_candidates.return_value = ([(detection, "ok")], "ok")
             pad.return_value.evaluate.return_value = PadResult(True, "passed", .99)
             recognizer.return_value.recognize.return_value = RecognitionResult("SV1", .1)
-            self.assertFalse(self.frame().json()["accepted"])
-            self.assertFalse(self.frame().json()["accepted"])
             self.assertTrue(self.frame().json()["created"])
             self.assertFalse(self.frame().json()["created"])
             with self.factory() as db:
                 self.assertEqual(len(list(db.scalars(select(Attendance)))), 1)
 
+    def test_multiple_faces_prioritize_student_not_yet_attended(self):
+        second_id = self.post("/students", {"student_code": "SV2", "name": "Second", "class_id": self.class_id}).json()["id"]
+        self.post(f"/sessions/{self.session_id}/manual-attendance", {"student_id": self.student_id, "reason": "Already present"})
+        with self.factory() as db:
+            db.add(FaceReference(student_id=second_id, embedding="[]", enrolled_by="test"))
+            db.commit()
+        large = FaceDetection((20, 20, 100, 100), (70, 70), 10000, (160, 160), True, 1)
+        small = FaceDetection((115, 40, 40, 40), (135, 60), 1600, (160, 160), True, 1)
+        with patch("app.api.attendance._detector") as detector, patch("app.api.attendance._pad") as pad, patch("app.api.attendance._recognizer") as recognizer:
+            detector.return_value.detect_candidates.return_value = ([(large, "ok"), (small, "ok")], "ok")
+            pad.return_value.evaluate.return_value = PadResult(True, "passed", .99)
+            recognizer.return_value.recognize.side_effect = [RecognitionResult("SV1", .1), RecognitionResult("SV2", .1)]
+            result = self.frame().json()
+        self.assertTrue(result["created"])
+        self.assertEqual(result["student_code"], "SV2")
+
     def test_pad_rejection_and_error_fail_closed(self):
         detection = FaceDetection((40, 40, 80, 80), (80, 80), 6400, (160, 160), True, 1)
         with patch("app.api.attendance._detector") as detector, patch("app.api.attendance._pad") as pad:
-            detector.return_value.detect_largest.return_value = (detection, "ok")
+            detector.return_value.detect_candidates.return_value = ([(detection, "ok")], "ok")
             pad.return_value.evaluate.return_value = PadResult(False, "spoof", .2)
             for _ in range(3): response = self.frame()
             self.assertFalse(response.json()["accepted"])

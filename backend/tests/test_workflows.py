@@ -68,11 +68,11 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(result["APCER"], .5)
         self.assertEqual(result["BPCER"], .5)
 
-    def test_image_limits(self):
+    def test_image_validation_has_no_dimension_limits(self):
         from PIL import Image
-        stream = io.BytesIO()
-        Image.new("RGB", (2100, 2100)).save(stream, format="PNG")
-        with self.assertRaises(ValueError):
+        for dimensions in ((32, 32), (2100, 2100)):
+            stream = io.BytesIO()
+            Image.new("RGB", dimensions).save(stream, format="PNG")
             validate_image(stream.getvalue())
         with self.assertRaises(ValueError):
             validate_image(b"not an image")

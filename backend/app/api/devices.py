@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.services.camera_preview import previews
+from app.services.bridge_control import bridge
 from app.services.images import MAX_IMAGE_BYTES, validate_image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +22,24 @@ from app.schemas.api import DeviceConfigInput
 from app.services.stability import gate
 
 router = APIRouter()
+
+
+@router.get("/camera-bridge/status")
+def bridge_status(_: str = Depends(verify_token)):
+    return bridge.status()
+
+
+@router.post("/camera-bridge/start")
+def start_bridge(_: str = Depends(verify_token)):
+    try:
+        return bridge.start()
+    except OSError:
+        raise HTTPException(503, "Backend không kết nối được ESP32. Kiểm tra Wi-Fi/IP camera; nếu Docker không truy cập được SoftAP, hãy chạy camera_bridge.py trên laptop hoặc dùng camera laptop.")
+
+
+@router.post("/camera-bridge/stop")
+def stop_bridge(_: str = Depends(verify_token)):
+    return bridge.stop()
 
 
 def config_response(device_id, db):

@@ -49,8 +49,8 @@ class FaceRecognitionAdapter:
             raise ValueError("Unable to encode face")
         return encodings[0]
 
-    def recognize(self, image_bytes: bytes, box, db, class_id: int):
-        if not self.ready:
+    def recognize(self, image_bytes: bytes, box, db, class_id: int, *, threshold=None):
+        if self.engine is None or (threshold is None and not self.ready):
             return None
         probe = self.encode(image_bytes, box)
         matches = []
@@ -63,7 +63,8 @@ class FaceRecognitionAdapter:
                 continue
             matches.append((float(np.linalg.norm(vector - probe)), student.student_code))
         matches.sort()
-        if not matches or matches[0][0] > settings.recognition_threshold:
+        cutoff = settings.recognition_threshold if threshold is None else threshold
+        if not 0 < cutoff <= 0.6 or not matches or matches[0][0] > cutoff:
             return None
         if len(matches) > 1 and matches[1][0] - matches[0][0] < settings.recognition_margin:
             return None

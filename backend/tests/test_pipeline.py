@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -26,11 +27,13 @@ class PipelineTests(unittest.TestCase):
 
     def test_stability_resets_on_motion_and_gap(self):
         gate = StabilityGate()
-        self.assertFalse(gate.observe("cam", (0, 0, 100, 100), 0))
-        self.assertFalse(gate.observe("cam", (1, 1, 100, 100), 1))
-        self.assertTrue(gate.observe("cam", (2, 2, 100, 100), 2))
-        self.assertFalse(gate.observe("cam", (100, 100, 100, 100), 3))
-        self.assertFalse(gate.observe("cam", (100, 100, 100, 100), 10))
+        test_settings = SimpleNamespace(stable_frames=3, stable_gap_seconds=2.5)
+        with patch("app.services.stability.settings", test_settings):
+            self.assertFalse(gate.observe("cam", (0, 0, 100, 100), 0))
+            self.assertFalse(gate.observe("cam", (1, 1, 100, 100), 1))
+            self.assertTrue(gate.observe("cam", (2, 2, 100, 100), 2))
+            self.assertFalse(gate.observe("cam", (100, 100, 100, 100), 3))
+            self.assertFalse(gate.observe("cam", (100, 100, 100, 100), 10))
 
     def test_csv_formula_is_neutralized(self):
         report = attendance_csv([dict(checked_at="now", student_code="SV1", student_name="=1+1",

@@ -10,6 +10,8 @@ from app.core.security import verify_token
 from app.database import get_db
 from app.models import AttendanceSession, ClassRoom
 from app.schemas import SessionCreate, SessionResponse
+from app.models.school import SessionPause
+from app.services.stability import gate
 
 router = APIRouter()
 
@@ -39,7 +41,10 @@ def _set_status(session_id: int, target: str, db: Session) -> AttendanceSession:
     now = datetime.now(timezone.utc)
     if target == "open":
         if session.status == "closed":
-            raise HTTPException(status_code=409, detail="Closed session cannot be reopened")
+            if session.ends_at is None:
+                raise HTTPException(status_code=409, detail="Missing close time; cannot resume session safely")
+            db.add(SessionPause(session_id=session.id, paused_at=session.ends_at, resumed_at=now))
+            session.ends_at = None
         session.status = "open"
         session.starts_at = session.starts_at or now
     else:
@@ -48,6 +53,9 @@ def _set_status(session_id: int, target: str, db: Session) -> AttendanceSession:
         session.status = "closed"
         session.ends_at = now
     db.commit()
+    for key in list(gate.tracks):
+        if key[1] == session_id:
+            gate.reset(key)
     db.refresh(session)
     return session
 

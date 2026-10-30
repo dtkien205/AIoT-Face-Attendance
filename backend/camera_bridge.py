@@ -13,6 +13,7 @@ import logging
 import os
 import secrets
 import time
+from collections import deque
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
@@ -58,6 +59,41 @@ class LatestFrame:
             if self.sequence <= after or time.monotonic() - self.received > max_age:
                 return None
             return self.sequence, self.value
+
+
+class OfflineFrameQueue:
+    """Bounded, short-lived store-and-forward queue for sampled AI frames."""
+    def __init__(self, capacity=30, max_age=300):
+        self.capacity = max(1, min(300, int(capacity)))
+        self.max_age = max(10, min(3600, float(max_age)))
+        self.items = deque()
+        self.dropped = 0
+
+    def _expire(self, now=None):
+        now = time.time() if now is None else now
+        while self.items and now - self.items[0]["captured_at"] > self.max_age:
+            self.items.popleft()
+            self.dropped += 1
+
+    def put(self, session_id, image, captured_at=None):
+        self._expire(captured_at)
+        if len(self.items) >= self.capacity:
+            self.items.popleft()
+            self.dropped += 1
+        self.items.append({"session_id": session_id, "image": image,
+                           "captured_at": time.time() if captured_at is None else captured_at})
+
+    def peek(self, now=None):
+        self._expire(now)
+        return self.items[0] if self.items else None
+
+    def acknowledge(self):
+        if self.items:
+            self.items.popleft()
+
+    def __len__(self):
+        self._expire()
+        return len(self.items)
 
 
 def jpeg_frames(response):
@@ -261,6 +297,8 @@ class CameraBridge:
             backend = BackendConnection(self.backend_url, self.token, self.device_id, max(30, self.timeout))
             sequence, next_config, config = 0, 0, {}
             last_message = None
+            outbox = OfflineFrameQueue(os.getenv("CAMERA_OFFLINE_QUEUE_SIZE", "30"),
+                                       os.getenv("CAMERA_OFFLINE_MAX_AGE_SECONDS", "300"))
             try:
                 while not stop.is_set():
                     item = latest.get(sequence)
@@ -268,17 +306,36 @@ class CameraBridge:
                         continue
                     sequence, image = item
                     start = time.monotonic()
+                    pending = None
+                    attempted_image = None
+                    attempted_session = None
                     try:
                         if start >= next_config:
-                            config = backend.request("/devices/config")
-                            next_config = start + 2
+                            try:
+                                config = backend.request("/devices/config")
+                                next_config = start + 2
+                            except (OSError, ValueError, AttributeError, http.client.HTTPException) as exc:
+                                next_config = 0
+                                LOG.warning("Config refresh failed; using last known session temporarily: %s", exc)
                         session = config.get("session_id")
                         if config.get("active") and isinstance(session, int) and session > 0:
-                            newest = latest.get(after=-1, timeout=0)
-                            if newest is None:
-                                continue
-                            sequence, image = newest
-                            result = backend.image(prefix + f"/frames?session_id={session}", image)
+                            pending = outbox.peek()
+                            while pending is not None and pending["session_id"] != session:
+                                LOG.warning("Dropping queued frame for obsolete session %s", pending["session_id"])
+                                outbox.acknowledge()
+                                pending = outbox.peek()
+                            if pending is not None:
+                                attempted_image, attempted_session = pending["image"], pending["session_id"]
+                            else:
+                                newest = latest.get(after=-1, timeout=0)
+                                if newest is None:
+                                    continue
+                                sequence, attempted_image = newest
+                                attempted_session = session
+                            result = backend.image(prefix + f"/frames?session_id={attempted_session}", attempted_image)
+                            if pending is not None:
+                                outbox.acknowledge()
+                                LOG.info("Synchronized one offline frame; %d still queued", len(outbox))
                             message = ("accepted" if result.get("accepted") is True else "waiting", result.get("reason", "Backend confirmed attendance"))
                         else:
                             message = ("idle", "Live preview connected; assign an open session in dashboard")
@@ -286,7 +343,11 @@ class CameraBridge:
                             LOG.info("%s: %s", *message)
                             last_message = message
                     except (OSError, ValueError, AttributeError, http.client.HTTPException) as exc:
-                        config, next_config = {}, 0
+                        next_config = 0
+                        if attempted_image is not None and pending is None and attempted_session is not None:
+                            outbox.put(attempted_session, attempted_image)
+                            LOG.warning("Backend unavailable; queued frame %d/%d for temporary offline sync",
+                                        len(outbox), outbox.capacity)
                         LOG.warning("AI request not accepted: %s", exc)
                         stop.wait(1)
                     stop.wait(max(0, self.interval - (time.monotonic() - start)))
@@ -295,7 +356,7 @@ class CameraBridge:
 
         threads = [threading.Thread(target=worker, daemon=True, name=name)
                    for worker, name in ((reader, "camera-reader"), (preview_worker, "preview"), (ai_worker, "sampled-ai"))]
-        LOG.info("Low-latency %s: preview target %.0f FPS, AI interval %.2fs. Latest frames only; no queues.", mode, fps, self.interval)
+        LOG.info("Low-latency %s: preview target %.0f FPS, AI interval %.2fs. Offline AI queue is bounded and temporary.", mode, fps, self.interval)
         for thread in threads:
             thread.start()
         try:

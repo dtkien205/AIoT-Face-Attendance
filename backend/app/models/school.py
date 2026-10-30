@@ -49,6 +49,34 @@ class AttendanceSession(Base):
     attendances: Mapped[list["Attendance"]] = relationship(back_populates="session")
 
 
+class SessionPause(Base):
+    __tablename__ = "session_pauses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("attendance_sessions.id"), index=True)
+    paused_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    resumed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class CalibrationProfile(Base):
+    __tablename__ = "calibration_profiles"
+
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), primary_key=True)
+    samples: Mapped[str] = mapped_column(Text, default="[]")
+    pad_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recognition_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CameraTrial(Base):
+    __tablename__ = "camera_trials"
+
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.id"), primary_key=True)
+    enabled_by: Mapped[str] = mapped_column(String(255))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Attendance(Base):
     __tablename__ = "attendance"
     __table_args__ = (UniqueConstraint("session_id", "student_id", name="uq_session_student"),)

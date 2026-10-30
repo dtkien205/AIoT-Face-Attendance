@@ -73,7 +73,7 @@ class AntiSpoofAdapter:
     def ready(self):
         return self.session is not None and settings.pad_calibrated and 0.5 < settings.pad_real_threshold < 1
 
-    def evaluate(self, image_bytes: bytes, box=None) -> PadResult:
+    def evaluate(self, image_bytes: bytes, box=None, *, threshold=None) -> PadResult:
         if not image_bytes or box is None:
             return PadResult(False, "valid detected face is required")
         if self.session is None:
@@ -86,9 +86,12 @@ class AntiSpoofAdapter:
             probs = np.exp(logits - logits.max(axis=1, keepdims=True))
             probs /= probs.sum(axis=1, keepdims=True)
             score = float(probs[0, 1])
-            if not self.ready:
+            if threshold is None and not self.ready:
                 return PadResult(False, self.reason, score)
-            passed = int(np.argmax(probs[0])) == 1 and score >= settings.pad_real_threshold
+            cutoff = settings.pad_real_threshold if threshold is None else threshold
+            if not 0.5 < cutoff < 1:
+                return PadResult(False, "Invalid calibrated PAD threshold", score)
+            passed = int(np.argmax(probs[0])) == 1 and score >= cutoff
             return PadResult(passed, "PAD passed" if passed else "spoof or uncertain PAD score", score)
         except Exception:
             logger.exception("PAD inference failed")

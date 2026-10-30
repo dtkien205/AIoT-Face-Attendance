@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.models import Attendance, AttendanceSession, Student
-from app.models.school import DeviceConfig, FaceReference
+from app.models.school import DeviceConfig, FaceReference, SessionPause
 
 
 def record_attendance(db, session, student, *, device_id, verification):
@@ -34,8 +34,10 @@ def record_attendance(db, session, student, *, device_id, verification):
         return existing, False
     now = datetime.now(timezone.utc)
     start = session.starts_at.replace(tzinfo=timezone.utc) if session.starts_at else now
+    paused = sum((pause.resumed_at.replace(tzinfo=timezone.utc) - pause.paused_at.replace(tzinfo=timezone.utc)
+                  for pause in db.scalars(select(SessionPause).where(SessionPause.session_id == session_id))), timedelta())
     row = Attendance(session_id=session_id, student_id=student_id, checked_at=now,
-                     status="late" if now > start + timedelta(minutes=settings.late_after_minutes) else "present",
+                     status="late" if now > start + paused + timedelta(minutes=settings.late_after_minutes) else "present",
                      device_id=device_id, verification=verification)
     db.add(row)
     try:

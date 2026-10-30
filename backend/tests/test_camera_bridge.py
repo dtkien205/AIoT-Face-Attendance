@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from camera_bridge import CameraBridge
+from camera_bridge import CameraBridge, OfflineFrameQueue
 
 
 class BridgeTests(unittest.TestCase):
@@ -52,3 +52,17 @@ class BridgeTests(unittest.TestCase):
         bridge.api = Mock(side_effect=[{}, {"session_id": None, "active": False}, {"preview": True}, {"session_id": 4, "active": True}, {"accepted": True}])
         self.assertEqual(bridge.tick(0)["state"], "idle")
         self.assertEqual(bridge.tick(4)["state"], "accepted")
+
+
+class OfflineQueueTests(unittest.TestCase):
+    def test_queue_is_bounded_expires_and_acknowledges(self):
+        queue = OfflineFrameQueue(capacity=2, max_age=10)
+        queue.put(1, b"old", captured_at=100)
+        queue.put(1, b"middle", captured_at=101)
+        queue.put(1, b"new", captured_at=102)
+        self.assertEqual(queue.dropped, 1)
+        self.assertEqual(queue.peek(now=102)["image"], b"middle")
+        queue.acknowledge()
+        self.assertEqual(queue.peek(now=102)["image"], b"new")
+        self.assertIsNone(queue.peek(now=113))
+        self.assertEqual(queue.dropped, 2)
